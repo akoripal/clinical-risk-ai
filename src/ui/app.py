@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
 import json
+import os
 
-API_URL = "http://localhost:8000/predict"
+API_URL = st.secrets.get("API_URL", os.getenv("API_URL", "http://localhost:8000/predict"))
 
 st.set_page_config(
     page_title="Clinical Risk Assistant",
