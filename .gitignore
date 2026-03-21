@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 data/raw/
-data/processed/
+data/processed/diabetic_clean.csv
+data/processed/test_predictions.csv
 .DS_Store
 *.egg-info/
