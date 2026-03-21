@@ -35,9 +35,9 @@ class PatientInput(BaseModel):
     age_numeric: float
 
 def assign_risk_tier(prob: float) -> str:
-    if prob < 0.3:
+    if prob < 0.2:
         return "Low"
-    elif prob < 0.6:
+    elif prob < 0.45:
         return "Moderate"
     else:
         return "High"
@@ -65,4 +65,3 @@ def predict(patient: PatientInput):
 @app.get("/health")
 def health():
     return {"status": "ok"}
-    

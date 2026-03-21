@@ -84,9 +84,9 @@ def train_models(X_train, y_train, X_test, y_test):
     return results
 
 def assign_risk_tier(prob: float) -> str:
-    if prob < 0.3:
+    if prob < 0.2:
         return "Low"
-    elif prob < 0.6:
+    elif prob < 0.45:
         return "Moderate"
     else:
         return "High"
