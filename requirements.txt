@@ -19,6 +19,7 @@ pydantic==2.9.2
 loguru==0.7.2
 jupyter==1.1.1
 gunicorn==22.0.0
+groq>=1.1.0
 
 
 
