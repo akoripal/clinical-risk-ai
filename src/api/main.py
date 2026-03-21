@@ -3,8 +3,8 @@ import pandas as pd
 from pathlib import Path
 from fastapi import FastAPI
 from pydantic import BaseModel
-from groq import Groq
 from dotenv import load_dotenv
+from src.agent.clinical_agent import run_clinical_agent
 
 load_dotenv()
 
@@ -42,52 +42,27 @@ def assign_risk_tier(prob: float) -> str:
     else:
         return "High"
 
-def generate_clinical_narrative(patient: PatientInput, prob: float, tier: str) -> str:
-    client = Groq()
-    prompt = f"""You are a clinical decision support assistant. A logistic regression model has
-assessed a diabetic inpatient and produced the following risk profile.
-
-Patient data:
-- Age: {patient.age_numeric}
-- Lab procedures: {patient.num_lab_procedures}
-- Medications prescribed: {patient.num_medications}
-- Medication burden (active changes): {patient.medication_burden}
-- Number of diagnoses: {patient.number_diagnoses}
-- Diagnostic complexity score: {patient.diagnostic_complexity}
-- Emergency admission: {"Yes" if patient.is_emergency else "No"}
-- Prior inpatient visits: {patient.number_inpatient}
-- Prior emergency visits: {patient.number_emergency}
-
-Model output:
-- Prolonged stay probability: {prob:.1%}
-- Risk tier: {tier}
-
-Write a concise 3-sentence clinical narrative for a care coordinator.
-Sentence 1: State the risk level and the 2-3 most influential factors driving it.
-Sentence 2: Identify what this means operationally for the care team.
-Sentence 3: Recommend one specific, actionable next step.
-Do not use bullet points. Be direct and clinical in tone."""
-
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
-
 @app.post("/predict")
 def predict(patient: PatientInput):
     input_df = pd.DataFrame([patient.model_dump()])[FEATURES]
     prob = float(model.predict_proba(input_df)[0][1])
     tier = assign_risk_tier(prob)
-    narrative = generate_clinical_narrative(patient, prob, tier)
+
+    agent_result = run_clinical_agent(
+        patient_features=patient.model_dump(),
+        risk_prob=prob,
+        risk_tier=tier
+    )
+
     return {
         "risk_probability": round(prob, 4),
         "risk_tier": tier,
-        "clinical_narrative": narrative,
-        "input_features": patient.model_dump()
+        "clinical_narrative": agent_result["narrative"],
+        "agent_tool_calls": agent_result["tool_calls"],
+        "agent_turns": agent_result["turns"]
     }
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+    
