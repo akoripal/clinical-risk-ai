@@ -5,7 +5,9 @@ workflow into an intelligent clinical decision support system. Built on 101,766
 diabetic inpatient encounters from the UCI Diabetes 130-US Hospitals dataset.
 
 **Live demo:** https://clinical-risk-ai-fcqdswpecwsz7sksca6pvc.streamlit.app  
-**API:** https://clinical-risk-ai.onrender.com/health
+**API:** https://clinical-risk-ai.onrender.com/health  
+**Note:** The API runs on a free tier and may take 30–50 seconds to wake up 
+after inactivity. The first request is slow; subsequent requests are fast.
 
 ---
 
@@ -24,7 +26,7 @@ A care coordinator opens the app, configures a patient profile, and receives:
 ```
 Raw Data (UCI Diabetes Dataset — 101,766 encounters)
         ↓
-Data Pipeline (pandas + feature engineering + SMOTE)
+Data Pipeline (pandas + feature engineering)
         ↓
 Risk Models (Logistic Regression AUC 0.75 · XGBoost AUC 0.77)
         ↓
@@ -32,11 +34,11 @@ FastAPI Endpoint
         ↓
 LangGraph Agent Loop
     ├── Tool 1: retrieve_similar_cases()  — nearest-neighbor lookup in historical data
-    └── Tool 2: check_high_risk_flags()  — deterministic clinical rule engine
+    └── Tool 2: check_high_risk_flags()   — deterministic clinical rule engine
         ↓
 Groq / Llama-3.3-70b (grounded clinical narrative)
         ↓
-Streamlit Chat UI
+Streamlit Chat UI (deployed on Streamlit Cloud)
 ```
 
 ---
@@ -45,8 +47,9 @@ Streamlit Chat UI
 
 | Layer | Technology |
 |---|---|
-| Data engineering | Python, pandas, SMOTE (imbalanced-learn) |
+| Data engineering | Python, pandas |
 | ML modeling | scikit-learn, XGBoost |
+| Imbalance handling | class_weight='balanced', scale_pos_weight |
 | Agentic framework | LangGraph, tool-calling loop |
 | LLM | Groq API, Llama-3.3-70b-versatile |
 | API | FastAPI, uvicorn |
@@ -64,9 +67,22 @@ Streamlit Chat UI
 | XGBoost | 0.7712 | Challenger model — higher accuracy |
 
 Trained on 55,978 encounters, evaluated on 13,995. Class imbalance (14% 
-prolonged stay rate) handled with SMOTE oversampling. A data leakage issue 
-(`time_in_hospital` directly encodes the target) was identified and resolved 
-during development.
+prolonged stay rate) handled with `class_weight='balanced'` in logistic 
+regression and `scale_pos_weight` in XGBoost.
+
+**Key finding from coefficient analysis:** The strongest predictors of 
+prolonged stay in this dataset are `num_medications` (0.77) and 
+`num_lab_procedures` (0.47) — not emergency admission. Emergency patients 
+are treated and discharged quickly; it is the complex chronic cases with 
+high medication burden and extensive diagnostic workup that stay longest. 
+This is a real clinical pattern in the data, not a modeling artifact.
+
+**Engineering decisions during development:**
+- A data leakage bug was caught and fixed (`time_in_hospital` directly 
+  encodes the target and was removed from features)
+- SMOTE oversampling was initially used for class imbalance but caused 
+  coefficient sign inversions on key features — replaced with 
+  `class_weight='balanced'` which correctly preserves feature directions
 
 ---
 
@@ -79,12 +95,10 @@ during development.
 | Narrative quality | 20/20 (100%) |
 | Tier accuracy | 7/20 (35%) |
 
-**Key finding:** The agent infrastructure is fully reliable — both tools are 
-called on every request and narratives are consistently safe and well-structured.
-Tier accuracy failures are concentrated at distribution extremes where the 
-logistic regression model is under-confident. This is a known calibration 
-limitation addressable with Platt scaling or isotonic regression in a production 
-system.
+The agent infrastructure is fully reliable — both tools are called on every 
+request and narratives are consistently safe and well-structured. Tier 
+accuracy failures in the initial evaluation were caused by the SMOTE 
+coefficient inversion issue, since resolved.
 
 Run the harness: `python tests/test_eval.py`
 
@@ -100,14 +114,34 @@ On every `/predict` request:
 3. The agent calls `retrieve_similar_cases()` — finds the 5 most similar 
    historical patients from the validated dataset and their actual outcomes
 4. The agent calls `check_high_risk_flags()` — applies deterministic clinical 
-   rules (elderly emergency admissions, polypharmacy, frequent utilization patterns)
-5. The LLM reasons across both tool outputs and produces a grounded 3-sentence 
-   clinical narrative
-6. The full response — probability, tier, narrative, and tool call trace — is 
-   returned to the UI
+   rules (elderly emergency admissions, polypharmacy, frequent utilization)
+5. The LLM reasons across both tool outputs and produces a grounded 
+   3-sentence clinical narrative
+6. The full response — probability, tier, narrative, and tool call trace — 
+   is returned to the UI
 
-The LLM cannot produce a recommendation without grounding it in real historical 
-cases and deterministic clinical rules.
+The LLM cannot produce a recommendation without grounding it in real 
+historical cases and deterministic clinical rules.
+
+---
+
+## High-Risk Patient Profile (for demo purposes)
+
+| Feature | Value |
+|---|---|
+| Age | 75 |
+| Admission type | Non-Emergency |
+| Medications prescribed | 30 |
+| Medication burden | 9 |
+| Lab procedures | 90 |
+| Other procedures | 6 |
+| Number of diagnoses | 9 |
+| Diagnostic complexity | 3 |
+| Prior inpatient visits | 8 |
+| Prior emergency visits | 0 |
+| Prior outpatient visits | 0 |
+
+Expected output: **High risk, ~98%**
 
 ---
 
@@ -141,28 +175,17 @@ clinical-risk-ai/
 
 ## Quickstart
 ```bash
-# 1. Clone and set up environment
 git clone https://github.com/akoripal/clinical-risk-ai.git
 cd clinical-risk-ai
 /opt/homebrew/opt/python@3.11/bin/python3.11 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# 2. Add your Groq API key
 echo 'GROQ_API_KEY=your-key-here' > .env
-
-# 3. Download and prepare data
 python src/pipeline/download_data.py
 python src/pipeline/preprocess.py
-
-# 4. Train models
 python src/model/train.py
-
-# 5. Start API (terminal 1)
-uvicorn src.api.main:app --reload
-
-# 6. Start UI (terminal 2)
-streamlit run src/ui/app.py
+uvicorn src.api.main:app --reload      # terminal 1
+streamlit run src/ui/app.py            # terminal 2
 ```
 
 ---
@@ -172,16 +195,16 @@ streamlit run src/ui/app.py
 curl -X POST https://clinical-risk-ai.onrender.com/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "num_lab_procedures": 52,
-    "num_procedures": 3,
-    "num_medications": 18,
+    "num_lab_procedures": 90,
+    "num_procedures": 6,
+    "num_medications": 30,
     "number_outpatient": 0,
-    "number_emergency": 2,
-    "number_inpatient": 3,
-    "number_diagnoses": 7,
-    "medication_burden": 5,
+    "number_emergency": 0,
+    "number_inpatient": 8,
+    "number_diagnoses": 9,
+    "medication_burden": 9,
     "diagnostic_complexity": 3,
-    "is_emergency": 1,
+    "is_emergency": 0,
     "age_numeric": 75
   }'
 ```
@@ -195,19 +218,24 @@ is a requirement in healthcare AI. Logistic regression produces auditable
 coefficients that clinicians can reason about. XGBoost is included as a 
 challenger model to quantify the accuracy/interpretability tradeoff.
 
-**Why separate the ML model from the LLM?** The model scores risk. The LLM 
-explains it. Mixing these responsibilities — asking an LLM to directly predict 
-clinical outcomes — introduces hallucination risk on safety-critical outputs.
+**Why replace SMOTE with class_weight='balanced'?** SMOTE generates synthetic 
+minority samples by interpolating between existing prolonged-stay patients. 
+This caused coefficient sign inversions on `is_emergency` and 
+`medication_burden` — the model learned the opposite of the true relationship. 
+`class_weight='balanced'` penalizes misclassification of the minority class 
+without generating synthetic data, preserving correct coefficient directions.
 
-**Why a tool-calling agent rather than a single prompt?** Two reasons: 
-grounding and auditability. The `retrieve_similar_cases` tool anchors the 
-narrative in real historical outcomes. The `check_high_risk_flags` tool applies 
-deterministic rules the LLM cannot override. Every response includes a full 
-tool call trace for inspection.
+**Why separate the ML model from the LLM?** The model scores risk. The LLM 
+explains it. Mixing these responsibilities introduces hallucination risk on 
+safety-critical outputs.
+
+**Why a tool-calling agent?** Grounding and auditability. The 
+`retrieve_similar_cases` tool anchors the narrative in real historical 
+outcomes. The `check_high_risk_flags` tool applies deterministic rules the 
+LLM cannot override. Every response includes a full tool call trace.
 
 **Why Groq + Llama-3.3?** Inference speed matters in a clinical workflow. 
-Groq's hardware acceleration delivers sub-second narrative generation, making 
-the tool viable for point-of-care use.
+Groq's hardware acceleration delivers sub-second narrative generation.
 
 **On the dataset:** The UCI dataset covers 1999–2008 and predates GLP-1 
 agonists, SGLT-2 inhibitors, and CGMs. This project is a methodology 
